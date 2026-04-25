@@ -1,0 +1,64 @@
+# 1. 原始 VDSR
+python train_ablition.py --model vdsr --weight_save_path weight/vdsr.pth --epochs 80
+python train_ablition.py --model vdsr --reduction 4 --num_blocks 10 \
+    --datasets_path ../VDSR_lunwenfuxian/datasets/train_x2.h5 \
+    --weight_save_path weight/vdsr.pth --epochs 80
+# 2. 仅深度可分离卷积
+python train_ablition.py --model dsconv --weight_save_path weight/dsconv.pth --epochs 80 --num_blocks 10
+python train_ablition.py --model dsconv --reduction 4 --num_blocks 10 \
+    --datasets_path ../VDSR_lunwenfuxian/datasets/train_x2.h5 \
+    --weight_save_path weight/dsconv.pth --epochs 80
+# 3. DSConv + 通道注意力（无局部残差）
+python train_ablition.py --model dsconv_hat --weight_save_path weight/dsconv_hat.pth --epochs 80 --num_blocks 10
+python train_ablition.py --model dsconv_hat --reduction 4 --num_blocks 10 \
+    --datasets_path ../VDSR_lunwenfuxian/datasets/train_x2.h5 \
+    --weight_save_path weight/dsconv_hat.pth --epochs 80
+# 4. 完整 Eff-HASR（深度可分离 + 注意力 + 局部残差）
+python train_ablition.py --model effhasr --weight_save_path weight/effhasr.pth --epochs 80 --num_blocks 10
+python train_ablition.py --model effhasr --reduction 4 --num_blocks 10 \
+    --datasets_path ../VDSR_lunwenfuxian/datasets/train_x2.h5 \
+    --weight_save_path weight/effhasr.pth --epochs 80
+#5.训练无 HAT 的模型（仅深度可分离卷积 + 局部残差）
+python train_ablition.py --model dsconv_lr \
+    --num_blocks 10 \
+    --datasets_path ../VDSR_lunwenfuxian/datasets/train_x2.h5 \
+    --weight_save_path weight_dsconv_lr/dsconv_lr.pth --epochs 80
+# 6. 训练dsconv_lr scale==4
+python train_scale4.py \
+    --datasets_path ../VDSR_lunwenfuxian/datasets/train_x4.h5 \
+    --weight_save_path weight/dsconv_lr_scale4.pth \
+    --batch_size 64 \
+    --epochs 80 \
+    --num_blocks 10
+# 测试 VDSR
+python test_ablition.py --model vdsr --model_path weight/vdsr.pth --test_dir datasets/Set5 --scale 2
+python test_ablition.py --model vdsr \
+    --model_path weight/vdsr.pth \
+    --reduction 4 --num_blocks 10 \
+    --test_dir ../VDSR_lunwenfuxian/datasets/set5 --scale 2
+# 测试 DSConv
+python test_ablition.py --model dsconv --model_path weight/dsconv.pth --test_dir datasets/Set5 --scale 2 --num_blocks 10
+python test_ablition.py --model dsconv \
+    --model_path weight/dsconv.pth \
+    --reduction 4 --num_blocks 10 \
+    --test_dir ../VDSR_lunwenfuxian/datasets/set5 --scale 2
+# 测试 DSConv+HAT
+python test_ablition.py --model dsconv_hat \
+    --model_path weight/dsconv_hat.pth \
+    --reduction 4 --num_blocks 10 \
+    --test_dir ../VDSR_lunwenfuxian/datasets/set5 --scale 2
+
+# 测试 Eff-HASR
+python test_ablition.py --model effhasr --model_path weight/effhasr.pth --test_dir datasets/Set5 --scale 2 --num_blocks 10
+python test_ablition.py --model effhasr \
+    --model_path weight/effhasr.pth \
+    --reduction 4 --num_blocks 10 \
+    --test_dir ../VDSR_lunwenfuxian/datasets/set5 --scale 2
+
+#无 HAT 的模型（仅深度可分离卷积 + 局部残差）
+python test_ablition.py --model dsconv_lr \
+    --model_path weight_dsconv_lr/dsconv_lr.pth_epoch5.pth \
+    --reduction 4 --num_blocks 10 \
+    --test_dir ../VDSR_lunwenfuxian/datasets/set5 --scale 2
+# 测试dsconv_lr scale==4
+python test_scale4.py --model_path weight/dsconv_lr_scale4.pth --test_dir datasets/Set5 --scale 4 --num_blocks 10
