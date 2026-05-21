@@ -4,7 +4,7 @@ import torch.nn as nn
 # ========== 公共组件 ==========
 class DepthwiseSeparableConv(nn.Module):
     def __init__(self, in_channels, out_channels, kernel_size=3, padding=1):
-        super().__init__()
+        super(DepthwiseSeparableConv, self).__init__()
         self.depthwise = nn.Conv2d(in_channels, in_channels, kernel_size,
                                    padding=padding, groups=in_channels)
         self.pointwise = nn.Conv2d(in_channels, out_channels, 1)
@@ -15,9 +15,8 @@ class DepthwiseSeparableConv(nn.Module):
         return x
 
 class HAT(nn.Module):
-    """轻量级通道注意力模块，支持可调节的压缩比 reduction"""
     def __init__(self, channels, reduction=4):
-        super().__init__()
+        super(HAT, self).__init__()
         self.gap = nn.AdaptiveAvgPool2d(1)
         self.fc = nn.Sequential(
             nn.Linear(channels, channels // reduction, bias=False),
@@ -32,10 +31,10 @@ class HAT(nn.Module):
         y = self.fc(y).view(b, c, 1, 1)
         return x * y
 
-# ========== 模型 1: 原始 VDSR (20层标准卷积) ==========
+# ========== 模型 1: VDSR ==========
 class VDSR(nn.Module):
     def __init__(self, num_channels=1, base_filter=64):
-        super().__init__()
+        super(VDSR, self).__init__()
         self.conv1 = nn.Conv2d(num_channels, base_filter, 3, padding=1)
         self.relu = nn.ReLU(inplace=True)
         middle = []
@@ -61,10 +60,10 @@ class VDSR(nn.Module):
                 if m.bias is not None:
                     nn.init.constant_(m.bias, 0)
 
-# ========== 模型 2: 仅深度可分离卷积 (无注意力，无局部残差) ==========
+# ========== 模型 2: DSConv ==========
 class DSConv(nn.Module):
     def __init__(self, num_channels=1, base_filter=64, num_blocks=10):
-        super().__init__()
+        super(DSConv, self).__init__()
         self.conv_input = nn.Conv2d(num_channels, base_filter, 3, padding=1)
         self.relu = nn.ReLU(inplace=True)
         blocks = []
@@ -90,10 +89,10 @@ class DSConv(nn.Module):
                 if m.bias is not None:
                     nn.init.constant_(m.bias, 0)
 
-# ========== 模型 3: DSConv + 通道注意力 (无局部残差) ==========
+# ========== 模型 3: DSConv+HAT ==========
 class DSConvHAT(nn.Module):
     def __init__(self, num_channels=1, base_filter=64, num_blocks=10, reduction=4):
-        super().__init__()
+        super(DSConvHAT, self).__init__()
         self.conv_input = nn.Conv2d(num_channels, base_filter, 3, padding=1)
         self.relu = nn.ReLU(inplace=True)
         blocks = []
@@ -120,10 +119,10 @@ class DSConvHAT(nn.Module):
                 if m.bias is not None:
                     nn.init.constant_(m.bias, 0)
 
-# ========== 模型 4: 完整 Eff-HASR (深度可分离 + 注意力 + 局部残差) ==========
+# ========== 模型 4: Eff-HASR ==========
 class HASBlock(nn.Module):
     def __init__(self, channels, reduction=4):
-        super().__init__()
+        super(HASBlock, self).__init__()
         self.dw_conv = DepthwiseSeparableConv(channels, channels)
         self.act = nn.ReLU(inplace=True)
         self.hat = HAT(channels, reduction=reduction)
@@ -133,15 +132,15 @@ class HASBlock(nn.Module):
         out = self.dw_conv(x)
         out = self.act(out)
         out = self.hat(out)
-        out = out + identity   # 局部残差
+        out = out + identity
         return out
 
 class EffHASR(nn.Module):
     def __init__(self, num_channels=1, base_filter=64, num_blocks=10, reduction=4):
-        super().__init__()
+        super(EffHASR, self).__init__()
         self.conv_input = nn.Conv2d(num_channels, base_filter, 3, padding=1)
         self.relu = nn.ReLU(inplace=True)
-        blocks = [HASBlock(base_filter, reduction=reduction) for _ in range(num_blocks)]
+        blocks = [HASBlock(base_filter, reduction) for _ in range(num_blocks)]
         self.blocks = nn.Sequential(*blocks)
         self.conv_output = nn.Conv2d(base_filter, num_channels, 3, padding=1)
         self._initialize_weights()
@@ -161,9 +160,86 @@ class EffHASR(nn.Module):
                 if m.bias is not None:
                     nn.init.constant_(m.bias, 0)
 
+# ========== 模型 5: DSConv+LR ==========
+class DSConvLR(nn.Module):
+    def __init__(self, num_channels=1, base_filter=64, num_blocks=10):
+        super(DSConvLR, self).__init__()
+        self.conv_input = nn.Conv2d(num_channels, base_filter, 3, padding=1)
+        self.relu = nn.ReLU(inplace=True)
+        self.blocks = nn.ModuleList()
+        for _ in range(num_blocks):
+            self.blocks.append(
+                nn.Sequential(
+                    DepthwiseSeparableConv(base_filter, base_filter),
+                    nn.ReLU(inplace=True)
+                )
+            )
+        self.conv_output = nn.Conv2d(base_filter, num_channels, 3, padding=1)
+        self._initialize_weights()
+
+    def forward(self, x):
+        residual = x
+        out = self.relu(self.conv_input(x))
+        for block in self.blocks:
+            out = block(out) + out
+        out = self.conv_output(out)
+        out = out + residual
+        return out
+
+    def _initialize_weights(self):
+        for m in self.modules():
+            if isinstance(m, nn.Conv2d):
+                nn.init.kaiming_normal_(m.weight, mode='fan_in', nonlinearity='relu')
+                if m.bias is not None:
+                    nn.init.constant_(m.bias, 0)
+
+# ========== 模型 6: FSRCNN ==========
+class FSRCNN(nn.Module):
+    def __init__(self, scale=2, num_channels=1, d=56, s=12, m=4):
+        super(FSRCNN, self).__init__()
+        self.scale = scale
+        self.first_part = nn.Sequential(
+            nn.Conv2d(num_channels, d, kernel_size=5, padding=2),
+            nn.PReLU(d)
+        )
+        self.shrink = nn.Sequential(
+            nn.Conv2d(d, s, kernel_size=1),
+            nn.PReLU(s)
+        )
+        mid = []
+        for _ in range(m):
+            mid.append(nn.Conv2d(s, s, kernel_size=3, padding=1))
+            mid.append(nn.PReLU(s))
+        self.mid_part = nn.Sequential(*mid)
+        self.expand = nn.Sequential(
+            nn.Conv2d(s, d, kernel_size=1),
+            nn.PReLU(d)
+        )
+        self.deconv = nn.ConvTranspose2d(d, num_channels, kernel_size=9, stride=scale,
+                                         padding=4, output_padding=scale-1)
+        self._initialize_weights()
+
+    def forward(self, x):
+        out = self.first_part(x)
+        out = self.shrink(out)
+        out = self.mid_part(out)
+        out = self.expand(out)
+        out = self.deconv(out)
+        return out
+
+    def _initialize_weights(self):
+        for m in self.modules():
+            if isinstance(m, nn.Conv2d):
+                nn.init.kaiming_normal_(m.weight, mode='fan_in', nonlinearity='relu')
+                if m.bias is not None:
+                    nn.init.constant_(m.bias, 0)
+            elif isinstance(m, nn.ConvTranspose2d):
+                nn.init.kaiming_normal_(m.weight, mode='fan_in', nonlinearity='relu')
+                if m.bias is not None:
+                    nn.init.constant_(m.bias, 0)
+
 # ========== 工厂函数 ==========
 def get_model(model_name, **kwargs):
-    """根据模型名称返回对应的模型实例"""
     if model_name == 'vdsr':
         return VDSR(**kwargs)
     elif model_name == 'dsconv':
@@ -172,5 +248,12 @@ def get_model(model_name, **kwargs):
         return DSConvHAT(**kwargs)
     elif model_name == 'effhasr':
         return EffHASR(**kwargs)
+    elif model_name == 'dsconv_lr':
+        return DSConvLR(**kwargs)
+    elif model_name == 'fsrcnn':
+        # FSRCNN 只接受 scale 和 num_channels，忽略其他参数
+        scale = kwargs.get('scale', 2)
+        num_channels = kwargs.get('num_channels', 1)
+        return FSRCNN(scale=scale, num_channels=num_channels)
     else:
         raise ValueError(f"Unknown model: {model_name}")
